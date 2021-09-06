@@ -12,12 +12,68 @@
 #include "nextkeyboard.h"
 #include <Keyboard.h>
 
+#define POLL_INTERVAL 20 // milliseconds between checks for a key
+
+// Width of a pulse in the protocol, in microseconds
+volatile uint8_t pulseWidthMicros = 50;
+
 // the timing per bit, 50microseconds
 #define TIMING 51
 
 // pick which pins you want to use
 #define KEYBOARDOUT 3
 #define KEYBOARDIN 2
+
+#define KB_QUERY_BYTE 0x10
+#define MOUSE_QUERY_BYTE 0x11
+
+void writeByte(byte value) {
+  // Write a single byte in the NeXT protocol encoding. This is a LSB ordering,
+  // with pulses of around 50 microseconds.
+
+  // Because the Arduino's clock is only good to within a few microseconds, we
+  // can't actually do something naive like step through the byte in LSB order
+  // and write each bit and then sleep for 50 microseconds. If we do that, we
+  // end up taking too long, and garbling the message.
+
+  // So, we compute the "runs" in the byte of consecutive bits. We can then
+  // call 'delayMicroseconds' just once for each consecutive run.
+  uint8_t runs[8];
+  unsigned int last_bit = 0;
+  unsigned int this_bit;
+  size_t run_idx = 0;
+  runs[0] = 1;
+  for (uint8_t i=0; i < 8; i++) {
+    this_bit = (value >> i) & 1;
+    if (this_bit == last_bit) {
+      runs[run_idx]++;
+    } else {
+      run_idx++;
+      runs[run_idx] = 1;
+      last_bit = this_bit;
+    }
+  }
+
+  last_bit = 0;
+  for (uint8_t i=0; i<=run_idx; i++) {
+    if (last_bit) {
+      digitalWrite(KEYBOARDOUT, HIGH);
+      delayMicroseconds(pulseWidthMicros * runs[i]);
+      last_bit = 0;
+    } else {
+      digitalWrite(KEYBOARDOUT, LOW);
+      delayMicroseconds(pulseWidthMicros * runs[i]);
+      last_bit = 1;
+    }
+  }
+  digitalWrite(KEYBOARDOUT, HIGH);
+}
+
+
+void query() {
+  // query the keyboard for data.
+  writeByte(KB_QUERY_BYTE);
+}
 
 // comment to speed things up, uncomment for help!
 #define DEBUG
@@ -68,17 +124,6 @@ void setLEDs(bool leftLED, bool rightLED) {
   delayMicroseconds(TIMING);
   digitalWrite(KEYBOARDOUT, LOW);
   delayMicroseconds(TIMING *7);
-  digitalWrite(KEYBOARDOUT, HIGH);
-}
-
-void query() {
-  // query the keyboard for data
-  digitalWrite(KEYBOARDOUT, LOW);
-  delayMicroseconds(TIMING *5);
-  digitalWrite(KEYBOARDOUT, HIGH);
-  delayMicroseconds(TIMING );
-  digitalWrite(KEYBOARDOUT, LOW);
-  delayMicroseconds(TIMING *3);
   digitalWrite(KEYBOARDOUT, HIGH);
 }
 
@@ -179,7 +224,7 @@ void kbrelease(char key) {
 
 void loop() {
   digitalWrite(LED, LOW);
-  delay(20);
+  delay(POLL_INTERVAL);
   uint32_t resp;
   query();
   resp = getresponse();
@@ -296,20 +341,21 @@ void loop() {
         kbpress(code);
         break;
       }
-      if ((resp & 0xF00) == 0x500) {
+      else if ((resp & 0xF00) == 0x500) {
         kbrelease(code);
 #ifdef DEBUG
         Serial.println(" ^ ");
 #endif
         break;
-      }
-
-      // re-press shift if need be
-      if (keydesc == KS_KP_Divide && shiftPressed) {
+      } else if (keydesc == KS_KP_Divide && shiftPressed) {
+        // re-press shift if need be
           if (resp & NEXT_KB_SHIFT_LEFT)
             kbpress(KEY_LEFT_SHIFT);
           if (resp & NEXT_KB_SHIFT_RIGHT)
             kbpress(KEY_RIGHT_SHIFT);
+      } else {
+        Serial.println(" ? ");
+        break;
       }
     }
   }
