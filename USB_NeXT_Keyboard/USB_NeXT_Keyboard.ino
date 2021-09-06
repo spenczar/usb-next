@@ -166,7 +166,11 @@ void kbbegin() {
 
 void kbrelease(char key) {
 #ifdef DEBUG
-  Serial.print("releasing key "); Serial.print(key, HEX); Serial.println();
+  if (key & 0xFFFFFF00) {
+    // releasing a modifier - no op
+  } else {
+    Serial.print("releasing key "); Serial.print(key, HEX); Serial.println();
+  }
 #endif
 #ifdef SEND_OUTPUT
   Keyboard.release(key);
