@@ -14,6 +14,9 @@
 #define OUT_PIN 3
 #define IN_PIN 2
 
+#define SET_REGISTER_1(REGISTER, POSITION) REGISTER |= (1 << POSITION)
+#define SET_REGISTER_0(REGISTER, POSITION) REGISTER &= ~(1 << POSITION)
+
 // Macros and caches for reading data from the input pin
 volatile uint8_t *input_pin_reg;
 uint8_t input_pin_mask;
@@ -21,10 +24,12 @@ uint8_t input_pin_mask;
 
 // Sampling math
 #define CLOCK_FREQ 16000000
-#define KB_DATA_FREQ 19000
+#define KB_DATA_FREQ 19200
 #define PULSE_WIDTH 1000000 / KB_DATA_FREQ
 #define SAMPLES_PER_PULSE 9
 #define KB_SAMPLE_FREQ CLOCK_FREQ / KB_DATA_FREQ / SAMPLES_PER_PULSE
+
+#define RESPONSE_SIZE 20
 
 const uint16_t t1_load = 0;
 const uint16_t t1_comp = KB_SAMPLE_FREQ;
@@ -47,7 +52,7 @@ volatile uint8_t currentKeycode = 0;
 volatile uint8_t currentModifier = 0;
 volatile uint32_t currentData = 0xFFFFFFFF;
 
-volatile uint8_t highbit_counts[32];
+volatile uint8_t highbit_counts[RESPONSE_SIZE];
 
 volatile uint8_t currentResponseIndex = 0;
 
@@ -95,32 +100,24 @@ void handleReady() {
 
   // Proceed to next state.
   currentState = query_sent;
-
-  // Send the query.
-  sendKBQuery();
-
   // Turn interrupts back on
   sei();
+  // Send the query.
+  sendKBQuery();
 }
 
 /////
 // Start-of-response interrupt
 /////
-ISR(INT0_vect) {
-  // Triggered when we get the falling edge of Pin INT0.
-  // Reset data to zero.
-  currentData = 0xFFFFFFFF;
-
-  // Delay for half a pulse
-  delayMicroseconds(PULSE_WIDTH*3 / 2);
-
-  // We can turn off the timeout.
-  disableTimeoutInterrupt();
-
-  // Also, turn off the response interrupt.
+ISR(INT1_vect) {
+  // Triggered when we get the falling edge of Pin INT1.
+  // Turn off the response interrupt.
   disableResponseInterrupt();
 
-  // Now we can turn on the ticker for reading data.
+  // We can turn off the timeout, since we have data.
+  disableTimeoutInterrupt();
+
+  // Turn on the ticker for reading data.
   enableReaderInterrupt();
 
   // Mark us as reading data.
@@ -128,18 +125,29 @@ ISR(INT0_vect) {
 }
 
 void enableResponseInterrupt() {
-  // Enable interrupts for INT0.
-  EIMSK |= (1 << INT0);
+  // Enable interrupts for INT1.
+  SET_REGISTER_1(EIMSK, INT1);
 }
 
 void configureResponseInterrupt() {
-  // Enable interrupts on the falling edge of Pin INT0
-  EICRA |=  (1 << ISC01);
-  EICRA &= ~(1 << ISC00);
+  // Enable interrupts on a low level of external interrupt pin 1
+  SET_REGISTER_0(EICRA, ISC10);
+  SET_REGISTER_0(EICRA, ISC11);
+  // Clear any existing interrupts for pin 1
+  SET_REGISTER_1(EIFR, INTF1);
+
+  debug("EICRA: 0x");
+  debugf(EICRA, HEX);
+  debug("  EIFR: 0x");
+  debugf(EIFR, HEX);
+  debugln();
 }
 
 void disableResponseInterrupt() {
-  EIMSK &= ~(1 << INT0);
+  // Enable the interrupt
+  SET_REGISTER_0(EIMSK, INT1);
+  // Clear any interrupts that have happened
+  SET_REGISTER_1(EIFR, INTF1);
 }
 
 /////
@@ -160,14 +168,21 @@ ISR(TIMER1_COMPA_vect) {
   if (readbit()) {
     highbit_counts[currentResponseIndex]++;
   }
-  nSampled++;
 
+  nSampled++;
   if (nSampled >= SAMPLES_PER_PULSE) {
     nSampled = 0;
     currentResponseIndex++;
+    if (currentResponseIndex == 8) {
+      // We're into the stop bit. Re-synchronize off the falling edge.
+      enableResponseInterrupt();
+      disableReaderInterrupt();
+      return;
+    }
   }
 
-  if (currentResponseIndex >= 32) {
+  if (currentResponseIndex >= RESPONSE_SIZE) {
+    // Done reading.
     currentResponseIndex = 0;
     nSampled = 0;
     disableReaderInterrupt();
@@ -179,7 +194,9 @@ void enableReaderInterrupt() {
   // Reset to zero
   TCNT1 = 0;
   // Enable register A comparison interrupts
-  TIMSK1 |= (1 << OCIE1A);
+  SET_REGISTER_1(TIMSK1, OCIE1A);
+  // Clear any existing interrupts for pin 1
+  SET_REGISTER_1(EIFR, INTF1);
 }
 
 void configureReaderInterrupt() {
@@ -216,11 +233,15 @@ void handlePause() {
 void handleQueryResponse() {
   // Send current key over USB.
   debug("current data: ");
-  for (uint8_t i = 0; i < 32; i++) {
+  for (uint8_t i = 0; i < RESPONSE_SIZE; i++) {
     debug(highbit_counts[i]);
+    //debug(highbit_counts[i] > (SAMPLES_PER_PULSE / 2));
     debug(" ");
     if (i % 4 == 3) {
       debug(" ");
+    }
+    if (i % 8 == 7) {
+      debug("  ");
     }
     highbit_counts[i] = 0;
   }
@@ -270,15 +291,25 @@ void setup() {
   input_pin_reg = portInputRegister(digitalPinToPort(IN_PIN));
   input_pin_mask = digitalPinToBitMask(IN_PIN);
 
-  configureResponseInterrupt();
-  configureReaderInterrupt();
 #ifdef DEBUG
   while (!Serial)
   Serial.begin(57600);
-  Serial.println("NeXT keyboard initialized!");
 #endif
+  configureResponseInterrupt();
+  configureReaderInterrupt();
 
+  debugln("--== NeXT Keyboard Initialization ==--");
   debug("Pulse width: "); debugln(PULSE_WIDTH);
   debug("Samples per pulse: "); debugln(SAMPLES_PER_PULSE);
   debug("Sample Frequency: "); debugln(KB_SAMPLE_FREQ);
+
+  delay(200);
+  sendKBQuery();
+  delay(5);
+  sendKBReset();
+  delay(8);
+  sendKBQuery();
+  delay(5);
+  sendKBReset();
+  delay(8);
 }
