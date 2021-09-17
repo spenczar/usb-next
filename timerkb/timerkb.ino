@@ -1,6 +1,8 @@
 #define PAUSE_DURATION 400 // Time, in milliseconds, between KB queries.
 #define DEBUG
 
+#include "next_protocol.h"
+
 #ifdef DEBUG
 #define debug(MSG) Serial.print(MSG)
 #define debugf(MSG, MODE) Serial.print(MSG, MODE)
@@ -34,13 +36,15 @@ uint8_t sample_pin_mask;
 // for 24 clock cycles.
 #define KB_DATA_FREQ (455000 / 24) // 18958
 #define PULSE_WIDTH (1000000 / KB_DATA_FREQ)  // 52
-#define PULSE_WIDTH_NANOS (1000000000 / KB_DATA_FREQ  // 52748
+#define PULSE_WIDTH_NANOS (1000000000 / KB_DATA_FREQ)  // 52748
+
 #define KB_SAMPLE_COMP (CLOCK_FREQ / KB_DATA_FREQ) // 843
 #define SAMPLE_INTERVAL_NANOS (1000000000 / CLOCK_FREQ) * KB_SAMPLE_COMP // 52687
-#define ERROR_PER_SAMPLE PULSE_WIDTH_NANOS - SAMPLE_INTERVAL_NANOS
+#define ERROR_PER_SAMPLE (PULSE_WIDTH_NANOS - SAMPLE_INTERVAL_NANOS)
 #define PULSE_SETTLE_TIME 5
 
-#define RESPONSE_SIZE 24
+
+#define RESPONSE_SIZE 20
 
 const uint16_t t1_load = 0;
 const uint16_t t1_comp = KB_SAMPLE_COMP;
@@ -68,6 +72,23 @@ volatile uint8_t currentResponseIndex = 0;
 ///////
 // Protocol
 ///////
+
+#define IDLE_SIGNAL 0x180600
+
+struct KeyCommand {
+  uint8_t keycode;
+  uint8_t modifiers;
+  bool pressed; // vs released
+};
+
+struct KeyCommand parseCurrentData() {
+  struct KeyCommand cmd;
+  cmd.keycode   = (currentData >> 1)  & 0xFF;
+  cmd.modifiers = (currentData >> 11) & 0xFF;
+  cmd.pressed   = !(cmd.keycode & 0x80);
+  cmd.keycode   = cmd.keycode & 0x7F;
+  return cmd;
+}
 
 void sendKBQuery() {
   digitalWrite(OUT_PIN, LOW);
@@ -174,12 +195,13 @@ ISR(TIMER1_COMPA_vect) {
   TCNT1 = 0;
 
   enable_sample_pin();
-  currentData |= (readbit() << currentResponseIndex);
+  if (readbit()) {
+    currentData |= ((uint32_t)1 << currentResponseIndex);
+  }
   disable_sample_pin();
 
   currentResponseIndex++;
-
-  if (currentResponseIndex >= RESPONSE_SIZE) {
+  if (currentResponseIndex > RESPONSE_SIZE) {
     // Done reading.
     currentResponseIndex = 0;
     disableReaderInterrupt();
@@ -230,18 +252,16 @@ void handlePause() {
 void handleQueryResponse() {
   // Send current key over USB.
   debug("current data: ");
-  for (uint8_t i = 0; i <= RESPONSE_SIZE; i++) {
-    debug((currentData >> i) & 1);
-    debug("");
-    if (i % 4 == 3) {
-      debug(" ");
-    }
-    if (i % 8 == 7) {
-      debug(" ");
-    }
+  if (currentData == IDLE_SIGNAL) {
+    debugln("idle");
+  } else {
+    struct KeyCommand cmd = parseCurrentData();
+    debug("mod: "); debugf(cmd.modifiers, HEX); debugln();
+    debug("key: "); debugf(cmd.keycode, HEX); debugln();
+    debug("prs: "); debug(cmd.pressed); debugln();
   }
+
   currentData = 0;
-  debugln();
   // sendKey(currentKeycode, currentModifier);
   currentState = pause;
 }
