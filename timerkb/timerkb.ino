@@ -13,6 +13,7 @@
 
 #define OUT_PIN 3
 #define IN_PIN 2
+#define SAMPLE_INDICATOR_PIN 5
 
 #define SET_REGISTER_1(REGISTER, POSITION) REGISTER |= (1 << POSITION)
 #define SET_REGISTER_0(REGISTER, POSITION) REGISTER &= ~(1 << POSITION)
@@ -20,19 +21,29 @@
 // Macros and caches for reading data from the input pin
 volatile uint8_t *input_pin_reg;
 uint8_t input_pin_mask;
-#define readbit() ((*input_pin_reg) & input_pin_mask)
+#define readbit() (PIND & 0b00000010)
+
+volatile uint8_t *sample_pin_reg;
+uint8_t sample_pin_mask;
+#define enable_sample_pin() PORTC |= 0b01000000
+#define disable_sample_pin() PORTC &= 0b10111111
 
 // Sampling math
 #define CLOCK_FREQ 16000000
-#define KB_DATA_FREQ 19200
-#define PULSE_WIDTH 1000000 / KB_DATA_FREQ
-#define SAMPLES_PER_PULSE 9
-#define KB_SAMPLE_FREQ CLOCK_FREQ / KB_DATA_FREQ / SAMPLES_PER_PULSE
+// discovered with a logical analyzer: a 455 kHz clock powers signals that last
+// for 24 clock cycles.
+#define KB_DATA_FREQ (455000 / 24) // 18958
+#define PULSE_WIDTH (1000000 / KB_DATA_FREQ)  // 52
+#define PULSE_WIDTH_NANOS (1000000000 / KB_DATA_FREQ  // 52748
+#define KB_SAMPLE_COMP (CLOCK_FREQ / KB_DATA_FREQ) // 843
+#define SAMPLE_INTERVAL_NANOS (1000000000 / CLOCK_FREQ) * KB_SAMPLE_COMP // 52687
+#define ERROR_PER_SAMPLE PULSE_WIDTH_NANOS - SAMPLE_INTERVAL_NANOS
+#define PULSE_SETTLE_TIME 5
 
-#define RESPONSE_SIZE 20
+#define RESPONSE_SIZE 24
 
 const uint16_t t1_load = 0;
-const uint16_t t1_comp = KB_SAMPLE_FREQ;
+const uint16_t t1_comp = KB_SAMPLE_COMP;
 
 //#define KB_ENABLE
 
@@ -50,9 +61,7 @@ enum state{
 volatile enum state currentState = ready;
 volatile uint8_t currentKeycode = 0;
 volatile uint8_t currentModifier = 0;
-volatile uint32_t currentData = 0xFFFFFFFF;
-
-volatile uint8_t highbit_counts[RESPONSE_SIZE];
+volatile uint32_t currentData = 0;
 
 volatile uint8_t currentResponseIndex = 0;
 
@@ -117,6 +126,7 @@ ISR(INT1_vect) {
   // We can turn off the timeout, since we have data.
   disableTimeoutInterrupt();
 
+  delayMicroseconds(PULSE_SETTLE_TIME);
   // Turn on the ticker for reading data.
   enableReaderInterrupt();
 
@@ -163,28 +173,15 @@ void disableTimeoutInterrupt() {}
 ISR(TIMER1_COMPA_vect) {
   TCNT1 = 0;
 
-  static uint8_t nSampled = 0;
+  enable_sample_pin();
+  currentData |= (readbit() << currentResponseIndex);
+  disable_sample_pin();
 
-  if (readbit()) {
-    highbit_counts[currentResponseIndex]++;
-  }
-
-  nSampled++;
-  if (nSampled >= SAMPLES_PER_PULSE) {
-    nSampled = 0;
-    currentResponseIndex++;
-    if (currentResponseIndex == 8) {
-      // We're into the stop bit. Re-synchronize off the falling edge.
-      enableResponseInterrupt();
-      disableReaderInterrupt();
-      return;
-    }
-  }
+  currentResponseIndex++;
 
   if (currentResponseIndex >= RESPONSE_SIZE) {
     // Done reading.
     currentResponseIndex = 0;
-    nSampled = 0;
     disableReaderInterrupt();
     currentState = query_response_complete;
   }
@@ -233,18 +230,17 @@ void handlePause() {
 void handleQueryResponse() {
   // Send current key over USB.
   debug("current data: ");
-  for (uint8_t i = 0; i < RESPONSE_SIZE; i++) {
-    debug(highbit_counts[i]);
-    //debug(highbit_counts[i] > (SAMPLES_PER_PULSE / 2));
-    debug(" ");
+  for (uint8_t i = 0; i <= RESPONSE_SIZE; i++) {
+    debug((currentData >> i) & 1);
+    debug("");
     if (i % 4 == 3) {
       debug(" ");
     }
     if (i % 8 == 7) {
-      debug("  ");
+      debug(" ");
     }
-    highbit_counts[i] = 0;
   }
+  currentData = 0;
   debugln();
   // sendKey(currentKeycode, currentModifier);
   currentState = pause;
@@ -286,10 +282,14 @@ void loop() {
 }
 void setup() {
   pinMode(OUT_PIN, OUTPUT);
+  pinMode(SAMPLE_INDICATOR_PIN, OUTPUT);
   pinMode(IN_PIN, INPUT);
 
   input_pin_reg = portInputRegister(digitalPinToPort(IN_PIN));
   input_pin_mask = digitalPinToBitMask(IN_PIN);
+
+  sample_pin_reg = portInputRegister(digitalPinToPort(SAMPLE_INDICATOR_PIN));
+  sample_pin_mask = digitalPinToBitMask(SAMPLE_INDICATOR_PIN);
 
 #ifdef DEBUG
   while (!Serial)
@@ -300,8 +300,7 @@ void setup() {
 
   debugln("--== NeXT Keyboard Initialization ==--");
   debug("Pulse width: "); debugln(PULSE_WIDTH);
-  debug("Samples per pulse: "); debugln(SAMPLES_PER_PULSE);
-  debug("Sample Frequency: "); debugln(KB_SAMPLE_FREQ);
+  debug("Sample Frequency: "); debugln(KB_SAMPLE_COMP);
 
   delay(200);
   sendKBQuery();
