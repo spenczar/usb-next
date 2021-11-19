@@ -1,9 +1,13 @@
-#define PAUSE_DURATION 400 // Time, in milliseconds, between KB queries.
+#define PAUSE_DURATION 1 // Time, in milliseconds, between KB queries.
 #define DEBUG
+#define KB_ENABLE
 
 #include "next_protocol.h"
+#include <Keyboard.h>
+#include "keymap.h"
 
 #ifdef DEBUG
+#define PAUSE_DURATION 200
 #define debug(MSG) Serial.print(MSG)
 #define debugf(MSG, MODE) Serial.print(MSG, MODE)
 #define debugln(MSG) Serial.println(MSG)
@@ -48,8 +52,6 @@ uint8_t sample_pin_mask;
 
 const uint16_t t1_load = 0;
 const uint16_t t1_comp = KB_SAMPLE_COMP;
-
-//#define KB_ENABLE
 
 enum state{
            ready,
@@ -259,22 +261,86 @@ void handleQueryResponse() {
     debug("mod: "); debugf(cmd.modifiers, HEX); debugln();
     debug("key: "); debugf(cmd.keycode, HEX); debugln();
     debug("prs: "); debug(cmd.pressed); debugln();
+
+    if (cmd.pressed) {
+      pressKey(cmd.keycode, cmd.modifiers);
+    } else {
+      releaseKey(cmd.keycode, cmd.modifiers);
+    }
   }
 
   currentData = 0;
-  // sendKey(currentKeycode, currentModifier);
   currentState = pause;
 }
 
-void sendKey(uint8_t keycode, uint8_t modifier) {
+void pressKey(uint8_t keycode, uint8_t modifier) {
   #ifdef KB_ENABLE
+  if (modifier != 0) {
+    Keyboard.press(mapModifiers(modifier));
+  }
+  uint8_t mapped_code = keymap[keycode];
+  if (mapped_code != 0) {
+    Keyboard.press(mapped_code);
+  }
   #endif
 
-  debug("sending key code=");
+  debug("press key code=");
   debugf(keycode, HEX);
   debug(" mod=");
   debugf(modifier, HEX);
+  debug(" mapped code=");
+  debugf(mapped_code, HEX);
   debugln();
+}
+
+void releaseKey(uint8_t keycode, uint8_t modifier) {
+  #ifdef KB_ENABLE
+
+  if ((keycode == 0) & (modifier == 0)) {
+    Keyboard.releaseAll();
+    return;
+  }
+
+  if (modifier != 0) {
+    Keyboard.release(mapModifiers(modifier));
+  }
+
+  uint8_t mapped_code = keymap[keycode];
+  if (mapped_code != 0) {
+    Keyboard.release(mapped_code);
+  }
+  #endif
+
+  debug("release key code=");
+  debugf(keycode, HEX);
+  debug(" mod=");
+  debugf(modifier, HEX);
+  debug(" mapped code=");
+  debugf(mapped_code, HEX);
+  debugln();
+}
+
+uint8_t mapModifiers(uint8_t nextMod) {
+  uint8_t result = 0;
+  if (nextMod & 0x2) {
+    result |= KEY_LEFT_CTRL;
+  }
+  if (nextMod & 0x4) {
+    result |= KEY_LEFT_SHIFT;
+  }
+  if (nextMod & 0x8) {
+    result |= KEY_RIGHT_SHIFT;
+  }
+  if (nextMod & 0x10) {
+    result |= KEY_LEFT_GUI;
+  }
+  if (nextMod & 0x20) {
+    result |= KEY_RIGHT_GUI;
+  }
+  if (nextMod & 0x40) {
+    result |= KEY_LEFT_ALT;
+  }
+  return result;
 }
 
 void loop() {
@@ -331,4 +397,6 @@ void setup() {
   delay(5);
   sendKBReset();
   delay(8);
+
+  Keyboard.begin();
 }
