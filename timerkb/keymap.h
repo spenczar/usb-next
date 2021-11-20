@@ -20,6 +20,16 @@ typedef unsigned short keycode;
 
  */
 
+// Modifiers
+#define KEY_LEFTCTRL   1<<0     // Keyboard Left Control
+#define KEY_LEFTSHIFT  1<<1     // Keyboard Left Shift
+#define KEY_LEFTALT    1<<2     // Keyboard Left Alt
+#define KEY_LEFTMETA   1<<3     // Keyboard Left GUI
+#define KEY_RIGHTCTRL  1<<4     // Keyboard Right Control
+#define KEY_RIGHTSHIFT 1<<5     // Keyboard Right Shift
+#define KEY_RIGHTALT   1<<6     // Keyboard Right Alt
+#define KEY_RIGHTMETA  1<<7     // Keyboard Right GUI
+
 #define KEY_NONE 0x00 // No key pressed
 #define KEY_ERR_OVF 0x01 //  Keyboard Error Roll Over - used for all slots if too many keys are pressed ("Phantom key")
 // 0x02 //  Keyboard POST Fail
@@ -218,7 +228,7 @@ static const uint8_t keymap[0x80] =
    KEY_B,          // 35
    KEY_M,          // 36
    KEY_N,          // 37
-   KEY_NONE,       // 38
+   KEY_SPACE,      // 38
    KEY_A,          // 39
    KEY_S,          // 3A
    KEY_D,          // 3B

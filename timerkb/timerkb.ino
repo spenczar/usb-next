@@ -1,13 +1,12 @@
 #define PAUSE_DURATION 1 // Time, in milliseconds, between KB queries.
-#define DEBUG
+//#define DEBUG
 #define KB_ENABLE
 
-#include "next_protocol.h"
 #include <Keyboard.h>
 #include "keymap.h"
 
 #ifdef DEBUG
-#define PAUSE_DURATION 200
+#define PAUSE_DURATION 500
 #define debug(MSG) Serial.print(MSG)
 #define debugf(MSG, MODE) Serial.print(MSG, MODE)
 #define debugln(MSG) Serial.println(MSG)
@@ -275,13 +274,13 @@ void handleQueryResponse() {
 
 void pressKey(uint8_t keycode, uint8_t modifier) {
   #ifdef KB_ENABLE
-  if (modifier != 0) {
-    Keyboard.press(mapModifiers(modifier));
-  }
+  KeyReport report = {0};
+  report.modifiers = mapModifiers(modifier);
   uint8_t mapped_code = keymap[keycode];
   if (mapped_code != 0) {
-    Keyboard.press(mapped_code);
+    report.keys[0] = mapped_code;
   }
+  HID().SendReport(2, &report, sizeof(KeyReport));
   #endif
 
   debug("press key code=");
@@ -295,50 +294,43 @@ void pressKey(uint8_t keycode, uint8_t modifier) {
 
 void releaseKey(uint8_t keycode, uint8_t modifier) {
   #ifdef KB_ENABLE
-
   if ((keycode == 0) & (modifier == 0)) {
     Keyboard.releaseAll();
     return;
   }
-
+  KeyReport report = {0};
   if (modifier != 0) {
-    Keyboard.release(mapModifiers(modifier));
+    report.modifiers = mapModifiers(modifier);
   }
-
-  uint8_t mapped_code = keymap[keycode];
-  if (mapped_code != 0) {
-    Keyboard.release(mapped_code);
-  }
+  HID().SendReport(2, &report, sizeof(KeyReport));
   #endif
 
   debug("release key code=");
   debugf(keycode, HEX);
   debug(" mod=");
   debugf(modifier, HEX);
-  debug(" mapped code=");
-  debugf(mapped_code, HEX);
   debugln();
 }
 
 uint8_t mapModifiers(uint8_t nextMod) {
   uint8_t result = 0;
   if (nextMod & 0x2) {
-    result |= KEY_LEFT_CTRL;
+    result |= KEY_LEFTCTRL;
   }
   if (nextMod & 0x4) {
-    result |= KEY_LEFT_SHIFT;
+    result |= KEY_LEFTSHIFT;
   }
   if (nextMod & 0x8) {
-    result |= KEY_RIGHT_SHIFT;
+    result |= KEY_RIGHTSHIFT;
   }
   if (nextMod & 0x10) {
-    result |= KEY_LEFT_GUI;
+    result |= KEY_LEFTMETA;
   }
   if (nextMod & 0x20) {
-    result |= KEY_RIGHT_GUI;
+    result |= KEY_RIGHTMETA;
   }
   if (nextMod & 0x40) {
-    result |= KEY_LEFT_ALT;
+    result |= KEY_LEFTALT;
   }
   return result;
 }
@@ -377,14 +369,13 @@ void setup() {
   sample_pin_reg = portInputRegister(digitalPinToPort(SAMPLE_INDICATOR_PIN));
   sample_pin_mask = digitalPinToBitMask(SAMPLE_INDICATOR_PIN);
 
-#ifdef DEBUG
   while (!Serial)
   Serial.begin(57600);
-#endif
+
   configureResponseInterrupt();
   configureReaderInterrupt();
 
-  debugln("--== NeXT Keyboard Initialization ==--");
+  Serial.println("--== NeXT Keyboard Initialization ==--");
   debug("Pulse width: "); debugln(PULSE_WIDTH);
   debug("Sample Frequency: "); debugln(KB_SAMPLE_COMP);
 
@@ -397,6 +388,6 @@ void setup() {
   delay(5);
   sendKBReset();
   delay(8);
-
   Keyboard.begin();
+  Serial.println("keyboard on!");
 }
