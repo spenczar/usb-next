@@ -1,12 +1,12 @@
 #define PAUSE_DURATION 1 // Time, in milliseconds, between KB queries.
-//#define DEBUG
+// #define DEBUG
 #define KB_ENABLE
 
 #include <Keyboard.h>
 #include "keymap.h"
 
 #ifdef DEBUG
-#define PAUSE_DURATION 500
+#define PAUSE_DURATION 1
 #define debug(MSG) Serial.print(MSG)
 #define debugf(MSG, MODE) Serial.print(MSG, MODE)
 #define debugln(MSG) Serial.println(MSG)
@@ -19,6 +19,7 @@
 #define OUT_PIN 3
 #define IN_PIN 2
 #define SAMPLE_INDICATOR_PIN 5
+#define LED_PIN 13
 
 #define SET_REGISTER_1(REGISTER, POSITION) REGISTER |= (1 << POSITION)
 #define SET_REGISTER_0(REGISTER, POSITION) REGISTER &= ~(1 << POSITION)
@@ -361,21 +362,27 @@ void loop() {
 void setup() {
   pinMode(OUT_PIN, OUTPUT);
   pinMode(SAMPLE_INDICATOR_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
   pinMode(IN_PIN, INPUT);
 
-  input_pin_reg = portInputRegister(digitalPinToPort(IN_PIN));
+  digitalWrite(LED_PIN, HIGH);
   input_pin_mask = digitalPinToBitMask(IN_PIN);
 
   sample_pin_reg = portInputRegister(digitalPinToPort(SAMPLE_INDICATOR_PIN));
   sample_pin_mask = digitalPinToBitMask(SAMPLE_INDICATOR_PIN);
 
-  while (!Serial)
-  Serial.begin(57600);
+  #ifdef debug
+  int start = millis();
+  while ((!Serial) & (millis() - start < 2000)) {
+    Serial.begin(57600);
+  }
+  #endif
+  digitalWrite(LED_PIN, LOW);
 
   configureResponseInterrupt();
   configureReaderInterrupt();
 
-  Serial.println("--== NeXT Keyboard Initialization ==--");
+  debugln("--== NeXT Keyboard Initialization ==--");
   debug("Pulse width: "); debugln(PULSE_WIDTH);
   debug("Sample Frequency: "); debugln(KB_SAMPLE_COMP);
 
@@ -389,5 +396,6 @@ void setup() {
   sendKBReset();
   delay(8);
   Keyboard.begin();
-  Serial.println("keyboard on!");
+  debugln("keyboard on!");
+  digitalWrite(LED_PIN, LOW);
 }
