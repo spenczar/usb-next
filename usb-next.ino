@@ -1,12 +1,14 @@
-#define PAUSE_DURATION 1 // Time, in milliseconds, between KB queries.
-// #define DEBUG
+#define PAUSE_DURATION 100 // Time, in microseconds, between KB queries.
+#define USB_SEND_INTERVAL 1000 // microseconds
+//#define DEBUG
+#undef DEBUG
 #define KB_ENABLE
 
 #include <Keyboard.h>
 #include "keymap.h"
 
 #ifdef DEBUG
-#define PAUSE_DURATION 1
+#define PAUSE_DURATION 100
 #define debug(MSG) Serial.print(MSG)
 #define debugf(MSG, MODE) Serial.print(MSG, MODE)
 #define debugln(MSG) Serial.println(MSG)
@@ -247,7 +249,7 @@ void handleQueryResponseTimeout() {
 }
 
 void handlePause() {
-  delay(PAUSE_DURATION);
+  delayMicroseconds(PAUSE_DURATION);
   currentState = ready;
 }
 
@@ -273,43 +275,79 @@ void handleQueryResponse() {
   currentState = pause;
 }
 
+volatile KeyReport report = {0};
+volatile uint32_t last_send_time = micros();
+
 void pressKey(uint8_t keycode, uint8_t modifier) {
   #ifdef KB_ENABLE
-  KeyReport report = {0};
   report.modifiers = mapModifiers(modifier);
   uint8_t mapped_code = keymap[keycode];
   if (mapped_code != 0) {
-    report.keys[0] = mapped_code;
+    // Only set if it's not present
+    if (report.keys[0] != mapped_code && report.keys[1] != mapped_code &&
+        report.keys[2] != mapped_code && report.keys[3] != mapped_code &&
+        report.keys[4] != mapped_code && report.keys[5] != mapped_code) {
+      for (int i = 0; i < 6; i ++) {
+        if (report.keys[i] == 0) {
+          report.keys[i] = mapped_code;
+          break;
+        }
+      }
+    }
   }
-  HID().SendReport(2, &report, sizeof(KeyReport));
+  sendUSBReport();
   #endif
 
   debug("press key code=");
   debugf(keycode, HEX);
   debug(" mod=");
   debugf(modifier, HEX);
-  debug(" mapped code=");
+  debug(" mapped-code=");
   debugf(mapped_code, HEX);
   debugln();
 }
 
 void releaseKey(uint8_t keycode, uint8_t modifier) {
   #ifdef KB_ENABLE
-  if ((keycode == 0) & (modifier == 0)) {
-    Keyboard.releaseAll();
-    return;
+  uint8_t mapped_code = keymap[keycode];
+  if (mapped_code != 0) {
+    for (int i = 0; i < 6; i ++) {
+      if (report.keys[i] == mapped_code) {
+        report.keys[i] = 0;
+        break;
+      }
+    }
   }
-  KeyReport report = {0};
   if (modifier != 0) {
     report.modifiers = mapModifiers(modifier);
   }
-  HID().SendReport(2, &report, sizeof(KeyReport));
+  sendUSBReport();
   #endif
 
   debug("release key code=");
   debugf(keycode, HEX);
   debug(" mod=");
   debugf(modifier, HEX);
+  debug(" mapped-code=");
+  debugf(mapped_code, HEX);
+  debugln();
+}
+
+void sendUSBReport() {
+  uint32_t now = micros();
+  if ((now - last_send_time) < USB_SEND_INTERVAL) {
+    return;
+  }
+  HID().SendReport(2, &report, sizeof(KeyReport));
+  debug("elapsed: "); debugf(now - last_send_time, DEC);
+  last_send_time = now;
+
+  debug(" report[0]="); debugf(report.keys[0], HEX);
+  debug(" report[1]="); debugf(report.keys[1], HEX);
+  debug(" report[2]="); debugf(report.keys[2], HEX);
+  debug(" report[3]="); debugf(report.keys[3], HEX);
+  debug(" report[4]="); debugf(report.keys[4], HEX);
+  debug(" report[5]="); debugf(report.keys[5], HEX);
   debugln();
 }
 
@@ -371,12 +409,10 @@ void setup() {
   sample_pin_reg = portInputRegister(digitalPinToPort(SAMPLE_INDICATOR_PIN));
   sample_pin_mask = digitalPinToBitMask(SAMPLE_INDICATOR_PIN);
 
-  #ifdef debug
   int start = millis();
   while ((!Serial) & (millis() - start < 2000)) {
     Serial.begin(57600);
-  }
-  #endif
+   }
   digitalWrite(LED_PIN, LOW);
 
   configureResponseInterrupt();
