@@ -2,7 +2,7 @@
 
 This is an implementation of an adapter to let you run a NeXT keyboard over USB.
 
-A great deal of credit goes to Limor Friedf, who [wrote a
+A great deal of credit goes to Limor Fried, who [wrote a
 tutorial](https://learn.adafruit.com/usb-next-keyboard-with-arduino-micro/code)
 that I used heavily in my early versions of this code. Parts of that code are
 reused here under the BSD license.
